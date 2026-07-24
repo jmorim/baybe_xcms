@@ -447,10 +447,7 @@ resulted in peak splitting, but this seems to have worked well.
 ## BayBE optimization
 To make a fair comparison to BayBE, we need to consider what IPO was optimizing.
 The response surfaces map how PPS changes with the peak picking parameters. PPS
-is calculated with
-$$
-PPS = \frac{RP^2}{'all peaks' - LIP}
-$$
+is calculated with PPS = RP² / (all peaks − LIP),
 where RP is the number of reliable peaks and LIP is the number of low intensity
 peaks. RP is determined by the number of peaks matching an isotopologue pattern
 determined by the maximum possible carbons and the 1.1% 13C natural abundance.
@@ -722,7 +719,9 @@ parameters. I fed the raw QC data to Claude with the free Sonnet 5 model at
 medium effort and told it to generate peak picking parameters for `centWave`
 until it produced good peaks resembling Gaussian shapes.
 
-![Claude's response](plots/eic_gaussian_fits.png)
+```{r, fig.cap="Claude's response"}
+knitr::include_graphics('plots/eic_gaussian_fits.png')
+```
 
 It couldn't run `xcms` in its sandbox, but output suggested parameters:
 ```{r}
