@@ -69,6 +69,8 @@ optimization. The goal of optimization is to maximize the number of real peaks
 detected and minimize the number of false positives, i.e. noise, in the least
 amount of optimization time.
 
+Here's the [link to the GitHub repository](https://github.com/jmorim/baybe_xcms),
+and you can [download the conda environment.yml here](https://raw.githubusercontent.com/jmorim/baybe_xcms/refs/heads/master/environment.yml). 
 If you have problems, feel free to reach out at
 [morimoto@motoanalytical.com](mailto:morimoto@motoanalytical.com).
 
