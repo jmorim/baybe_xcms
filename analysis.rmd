@@ -1,7 +1,7 @@
 ---
 title: "BayBE Optimization of xcms Parameters"
 author: "Josh Morimoto"
-date: "`r Sys.Date()`"
+date: "Written July 23 2026 | Compiled `r format(Sys.Date(), '%B %d %Y')`"
 output: 
   html_document:
     self_contained: false
@@ -9,12 +9,20 @@ output:
     highlight: null
     toc: true
     toc_depth: 2
-    code_folding: show
 bibliography: references/references.bib
+link-citations: true
 csl: references/analytical-chemistry.csl
 ---
-
-```{r setup, include=FALSE}
+```{r}
+Sys.setenv(PYTHONNOUSERSITE='1')# For reticulate/python
+library(reticulate)
+use_condaenv(
+  'baybe',
+  conda = Sys.which('conda'),
+  required = TRUE
+)
+```
+```{r setup}
 knitr::opts_chunk$set(
   message=FALSE, warning=FALSE, 
   fig.align='center',
@@ -22,6 +30,12 @@ knitr::opts_chunk$set(
 
 library(knitr)
 library(kableExtra)
+
+make.kable = function(df, ...) {
+  kable(df, ...) |>
+    kable_styling(full_width =  TRUE) |>
+    scroll_box(width = '100%', height = '300px')
+}
 ```
 
 ## Introduction
@@ -60,8 +74,6 @@ If you have problems, feel free to reach out at
 
 ## Libraries
 ```{r, message=FALSE}
-Sys.setenv(PYTHONNOUSERSITE='1')# For reticulate/python
-library(reticulate)
 library(xcms)
 library(MsExperiment)
 library(IPO)
@@ -108,7 +120,10 @@ The functions to calculate peak picking score (PPS) are needed for the BayBE
 optimization, and are provided below, or available in my fork at
 [jmorim/IPO](https://github.com/jmorim/IPO).
 
-```{r class.source = 'fold-hide'}
+```{r echo=FALSE, results='asis'}
+cat('<details><summary>Show code</summary>\n\n')
+```
+```{r}
 calcPPS.exp <- function(xset, isotopeIdentification=c("IPO", "CAMERA"), ...) {
     
     isotopeIdentification <- match.arg(isotopeIdentification)
@@ -337,6 +352,9 @@ calcMaximumCarbon <-
     return(maximum_carbon)
   } 
 ```
+```{r echo=FALSE, results='asis'}
+cat('</details>\n\n')
+```
 
 ## IPO optimization
 
@@ -396,11 +414,11 @@ peaks that coelute to be considered different. My impression as an MS expert is
 it's redundant.
 
 It's worth noting that the models predicted a peak picking score (PPS) of over
-4500 in the 25th iteration, but didn't reach that in the second round of
+4500 in the first batch, but didn't reach that in the second round of
 optimization. The results for the "best settings" returned those that yielded
 a PPS of 4034, but the first round of optimization already had a maximum PPS
-of 4158 with the settings `ppm = 10.5, peakwidth = c(5.5, 35), mzdiff = 0.005`.
-We'll use those settings going forward.
+of 4158 with the settings `ppm = 10.5, peakwidth = c(5.5, 35), mzdiff = 0.005`,
+another issue with the package. We'll use the actual best settings going forward.
 
 I'd like to see what caffeine looks like with the optimal parameters.
 
@@ -460,13 +478,6 @@ some tinkering to get it to use CPU only. This shouldn't require heavy lifting
 since `torch` is just recommending some numbers.
 
 ```{r}
-reticulate::use_condaenv(
-  condaenv='baybe', 
-  conda='/home/morimoto/miniforge3/bin/conda',
-  required=TRUE)
-
-```
-```{r}
 baybe = import('baybe')
 torch = import('torch')
 baybe.parameters = import('baybe.parameters')
@@ -498,16 +509,26 @@ campaign = Campaign$Campaign(
   objective = objective
 )
 
-py_set_seed(17)
-recommendations = campaign$recommend(batch_size = 26L) # IPO does 26 at a time
+# Indentation matters here
+set_all_seeds = function(seed) {
+  reticulate::py_run_string(sprintf("
+import random, numpy, torch
+random.seed(%d)
+numpy.random.seed(%d)
+torch.manual_seed(%d)
+", seed, seed, seed))
+}
+
+set_all_seeds(17)
+recommendations = campaign$recommend(batch_size = 4L) # Match number of workers
 knitr::kable(recommendations) |>
   kable_styling(full_width = TRUE) |>
   scroll_box(width = "100%", height = "300px")
 
 qc.data = readMsExperiment(qc.files[1:2])
 plan(multisession, workers = 4)
-options = furrr_options(seed = 17)
-pps.scores = future_map(seq_len(nrow(recommendations)), ~ {
+time.baybe.0 = system.time({
+  pps.scores = future_map(seq_len(nrow(recommendations)), ~ {
   calcPPS.exp(
     xset = findChromPeaks(qc.data,
     param = CentWaveParam(
@@ -516,7 +537,8 @@ pps.scores = future_map(seq_len(nrow(recommendations)), ~ {
       mzdiff = recommendations[.x, 'mzdiff']
     ))
   )
-}, .options = options)
+}, .options = furrr_options(seed = TRUE))
+})
 plan(sequential)
 
 pps.scores.table = pps.scores |> bind_rows()
@@ -538,13 +560,15 @@ measurements.0 = recommendations |>
   bind_cols(pps.scores.table)
 
 campaign$add_measurements(measurements.0)
-recommendations.1 = campaign$recommend(batch_size = 26L) # Batch size should equal what IPO does
+recommendations.1 = campaign$recommend(batch_size = 4L)
 knitr::kable(recommendations.1) |> 
   kable_styling(full_width = TRUE) |>
   scroll_box(width = "100%", height = "300px")
 
+set_all_seeds(17)
 plan(multisession, workers = 4)
-pps.scores.1 = future_map(seq_len(nrow(recommendations.1)), ~ {
+time.baybe.1 = system.time({
+  pps.scores.1 = future_map(seq_len(nrow(recommendations.1)), ~ {
   calcPPS.exp(
     xset = findChromPeaks(qc.data,
     param = CentWaveParam(
@@ -553,7 +577,8 @@ pps.scores.1 = future_map(seq_len(nrow(recommendations.1)), ~ {
       mzdiff = recommendations.1[.x, 'mzdiff']
     ))
   )
-}, .options = options)
+}, .options = furrr_options(seed = TRUE))
+})
 plan(sequential)
 
 pps.scores.table.1 = pps.scores.1 |> bind_rows()
@@ -566,7 +591,8 @@ measurements.1 = recommendations.1 |> bind_cols(pps.scores.table.1)
 campaign$add_measurements(measurements.1)
 ```
 
-Peak picking score increased to 4041. But how do we know when we're done?
+The first two rounds took about a minute each, and peak picking score increased
+to 4103. But how do we know when we're done?
 
 ## Automatic iterative optimization with BayBE
 BayBE is meant to be an iterative process, typically used at the bench, for
@@ -579,7 +605,8 @@ are defined in the `max.iterations`, `patience`, and `tolerance` variables
 below.
 
 ```{r}
-run.iteration = function(campaign, qc.data, batch_size = 26L) {
+run.iteration = function(campaign, qc.data, batch_size = 4L) {
+  set_all_seeds(17)
   recs = campaign$recommend(batch_size = batch_size)
 
   pps.scores = future_map(seq_len(nrow(recs)), ~ {
@@ -591,28 +618,27 @@ run.iteration = function(campaign, qc.data, batch_size = 26L) {
         mzdiff = recs[.x, 'mzdiff']
       ))
     )
-  }, .options = options) |> bind_rows()
+  }, .options = furrr_options(seed=TRUE)) |> bind_rows()
 
   measurements = recs |> bind_cols(pps.scores)
   campaign$add_measurements(measurements)
 
-  c(recommendations = recs, scores = pps.scores, measurements = measurements)
+  list(recommendations = recs, scores = pps.scores, measurements = measurements)
 }
 
 max.iterations = 99
-patience = 3
+patience = 11 # Setting this so total iterations is comparable to IPO
 tolerance = 1
 
 best.pps = max(campaign$measurements$PPS)
 no.improvement.cnt = 0
-history = c()
 
 plan(multisession, workers = 4)
-time.baybe = system.time({
+time.baybe.2 = system.time({
   for (i in seq_len(max.iterations)) {
     result = run.iteration(campaign, qc.data)
-    history[[i]] = result
-    current.best = max(result$measurements.PPS, na.rm = TRUE)
+#    history[[i]] = result
+    current.best = max(result$measurements$PPS, na.rm = TRUE)
     cat(sprintf('Iteration %d - best PPS this round: %.4f (running best: %.4f)\n',
     i, current.best, max(best.pps, current.best)))
     if (current.best > best.pps + tolerance) {
@@ -630,56 +656,63 @@ time.baybe = system.time({
   }
 })
 plan(sequential)
-
-time.baybe
 ```
 
-This took about 10 minutes to run, and after 3 additional iterations, the
-optimization converged with a best PPS of 4137, about the same as IPO.
+This took about 75 minutes to run, and after 200 additional experiments, the
+optimization converged with a best PPS of 4176, about the same as IPO. The
+best determined settings were `ppm = 9.65, peakwidth = c(5.55, 34.82), mzdiff = 0.0037`.
 
 Again, caffeine will be plotted to see how the peaks look with these parameters.
 
 ```{r}
-history[[7]]
+make.kable(campaign$measurements)
 
-history[[7]]$measurements.ppm[which.max(history[[7]]$scores.PPS)]
+# Best settings from BayBE
+pp.baybe = campaign$measurements |>
+  filter(PPS == max(PPS)) |>
+  select(ppm, min_peakwidth, max_peakwidth, mzdiff, PPS)
 
 cwp.baybe = CentWaveParam(
-  ppm = history[[7]]$measurements.ppm[which.max(history[[7]]$scores.PPS)],
+  ppm = pp.baybe$ppm,
   peakwidth = c(
-    history[[7]]$measurements.min_peakwidth[which.max(history[[7]]$scores.PPS)],
-    history[[7]]$measurements.max_peakwidth[which.max(history[[7]]$scores.PPS)]
+    pp.baybe$min_peakwidth,
+    pp.baybe$max_peakwidth
   ),
-  mzdiff = history[[7]]$measurements.mzdiff[which.max(history[[7]]$scores.PPS)]
+  mzdiff = pp.baybe$mzdiff
 )
 
 peaks.baybe = findChromPeaks(qc.data, param = cwp.baybe)
 
-caffeine.mzr = calcPPM(195.0877, 10)
+caffeine.mzr = calcPPM(195.0877, pp.baybe$ppm)
 peaks.baybe |> 
   filterMz(c(caffeine.mzr[1], caffeine.mzr[2])) |>
   chromatogram() |> 
   plot()
 ```
 
-These results look pretty close to what I ended up with by manually tweaking
-the parameters.
+These results look pretty close to what IPO and my manual optimization ended up with.
+
+## Manual optimization
+This is repeated from the last post on the white tea.
 
 ```{r}
 pos.data = readMsExperiment(qc.files)
 
 cwp = CentWaveParam(
-  ppm = 10,
-  peakwidth = c(5, 20)
+  ppm = 6,
+  peakwidth = c(10, 30)
 )
 
-peaks.manual = findChromPeaks(qc.data |> filterRt(c(25, 480)), param = cwp)
-calcPPS(peaks.manual)
+peaks.manual = findChromPeaks(qc.data, param = cwp)
+calcPPS.exp(peaks.manual)
 peaks.manual |> 
   filterMz(c(caffeine.mzr[1], caffeine.mzr[2])) |>
   chromatogram() |> 
   plot()
 ```
+
+Even though PPS is 2365, I still like mine more because more of the peak is
+integrated than the others.
 
 ## LLM optimization
 I was curious if and how a large language model (LLM) could optimize these
@@ -708,10 +741,10 @@ peaks.claude |>
   chromatogram() |> 
   plot()
 
-calcPPS(peaks.claude)
+calcPPS.exp(peaks.claude)
 ```
 
-This looks reasonable, but the PPS score is only 1061, the worst of the
+This looks reasonable, but the PPS score is only 1062, the worst of the
 methods, suggesting many false negatives. However, Claude wasn't optimizing for
 PPS, but rather good peak shapes, and it used a correlation coefficient 
 to compare peaks to a Gaussian shape. Perhaps in another post, we can 
@@ -729,40 +762,53 @@ ipo.table = map_dfr(seq_along(pp.results), ~ {
   tibble(
     method = 'IPO',
     iteration = .x,
-    best.pps = max(pp.results[[.x]]$response[,'PPS'], na.rm = TRUE)
+    subexp = pp.results[[.x]]$response[,'exp'],
+    pps = pp.results[[.x]]$response[,'PPS'],
   )
 }) |>
-  mutate(cumulative.best = cummax(best.pps))
-# Last item in list is the result, so remove last row
+  mutate(
+    experiment = row_number(),
+    cumulative.best = cummax(pps)
+  )
+
+## Last item in list is the result, so remove last row
 ipo.table = ipo.table[-nrow(ipo.table), ]
 
-convergence.table = map_dfr(seq_along(history), ~ {
+# For BayBE, each iteration is in chunks of 4
+convergence.table = map_dfr(seq_len(nrow(campaign$measurements)), ~ {
   tibble(
     method = 'BayBE',
-    iteration = .x,
-    best.pps = max(history[[.x]]$scores.PPS, na.rm = TRUE)
+    iteration = ceiling(as.numeric(rownames(campaign$measurements)[.x]) / 4),
+    pps = campaign$measurements$PPS[.x],
   )
 }) |>
-  mutate(cumulative.best = cummax(best.pps)) |>
+  mutate(
+    experiment = row_number(),
+    subexp = rep(1:4, length.out = nrow(campaign$measurements)),
+    cumulative.best = cummax(pps)) |>
   bind_rows(ipo.table)
 
 convergence.table = convergence.table |>
   bind_rows(tibble(
     method = 'Manual',
     iteration = 3,
-    best.pps = calcPPS(peaks.manual)['PPS'],
-    cumulative.best = best.pps
-  ), tibble(
+    subexp = 1,
+    pps = calcPPS.exp(peaks.manual)['PPS'],
+    cumulative.best = pps
+  ) |> mutate(experiment = row_number(), cumulative.best = cummax(pps)), tibble(
     method = 'LLM',
     iteration = 1,
-    best.pps = calcPPS(peaks.claude)['PPS'],
-    cumulative.best = best.pps
-  ))
-convergence.table
+    pps = calcPPS.exp(peaks.claude)['PPS'],
+    cumulative.best = pps
+  ) |> mutate(experiment = row_number(), cumulative.best = cummax(pps))) |>
+  select(c(method, iteration, experiment, subexp, pps, cumulative.best))
+
+make.kable(convergence.table)
+
 ggplot(convergence.table, 
-  aes(x = iteration, y = cumulative.best, color = method)) +
+  aes(x = experiment, y = cumulative.best, color = method)) +
   geom_line() +
-  geom_point(aes(y = best.pps)) +
+  geom_point(aes(y = pps)) +
   labs(
     title = 'IPO vs BayBE Convergence',
     x = 'Iteration',
@@ -773,13 +819,13 @@ ggplot(convergence.table,
   theme(legend.position = 'bottom')
 ```
 
-So finally, the order of performance is BayBE > Manual > IPO > LLM.
-BayBE was able to find a better optimum than IPO, and when parallelized,
-should be faster than IPO. Manual optimization yielded better PPS than IPO,
-but required a lot of experience in dealing with this kind of data. Claude
-performed the worst out of the four methods, but used a conservative
-peak quality metric. Like anything with LLMs, it's dangerous to use its
-outputs without checking for yourself first.
+So finally, the order of performance is BayBE > IPO > manual > LLM.  BayBE was
+able to find a better optimum than IPO, but took significantly longer, and the
+gains were slim. IPO still performed better than manual optimization by its own
+metric, PPS.  Claude performed the worst out of the four methods, but used a
+conservative peak quality metric, and was only given one iteration. Like
+anything with LLMs, it's dangerous to use its outputs without checking for
+yourself first.
 
 ## IPO migration
 The irony and juxtaposition with the above paragraph doesn't escape me, but I
