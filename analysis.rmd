@@ -6,7 +6,7 @@ output:
   html_document:
     self_contained: false
     theme: null
-    highlight: null
+    highlight: zenburn
     toc: true
     toc_depth: 2
 bibliography: references/references.bib
@@ -26,7 +26,7 @@ use_condaenv(
 knitr::opts_chunk$set(
   message=FALSE, warning=FALSE, 
   fig.align='center',
-  cache=TRUE)
+  cache=TRUE, autodep=TRUE)
 
 library(knitr)
 library(kableExtra)

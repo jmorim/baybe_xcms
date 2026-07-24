@@ -1,6 +1,6 @@
+reticulate
 knitr
 kableExtra
-reticulate
 BiocParallel
 xcms
 ProtGenerics
